@@ -32,13 +32,13 @@ import { calculateScore, getTotalCorrectCount, getTotalWrongCount } from './scor
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
-  apiKey: "AIzaSyBuRZp9AfEXdJHX3jv24rbh-pyZgGuUwQY",
-  authDomain: "dehoatructuyenpro2.firebaseapp.com",
-  projectId: "dehoatructuyenpro2",
-  storageBucket: "dehoatructuyenpro2.firebasestorage.app",
-  messagingSenderId: "980136045526",
-  appId: "1:980136045526:web:fe51fc1849a63fb07b9277",
-  measurementId: "G-SY30NVW18N"
+  apiKey: "THỰC TẾ",
+  authDomain: "THỰC TẾ",
+  projectId: "THỰC TẾ",
+  storageBucket: "THỰC TẾ",
+  messagingSenderId: "THỰC TẾ",
+  appId: "THỰC TẾ",
+  measurementId: "THỰC TẾ"
 };
 
 // Initialize Firebase
@@ -739,6 +739,7 @@ export const getExam = async (examId: string): Promise<Exam | null> => {
       answers: data.answers || {},
       images: data.images,
       createdBy: data.createdBy || '',
+      pointsConfig: data.pointsConfig, // ✅ THÊM DÒNG NÀY
       createdAt: toDate(data.createdAt),
       updatedAt: toDate(data.updatedAt)
     };
@@ -762,6 +763,7 @@ export const getExamsByTeacher = async (teacherId: string): Promise<Exam[]> => {
       answers: data.answers || {},
       images: data.images,
       createdBy: data.createdBy || '',
+      pointsConfig: data.pointsConfig, // ✅ THÊM DÒNG NÀY
       createdAt: toDate(data.createdAt),
       updatedAt: toDate(data.updatedAt)
     };
@@ -805,6 +807,10 @@ export const createRoom = async (roomData: {
   timeLimit: number;
   classId?: string; // ✅ MỚI
   className?: string; // ✅ MỚI
+  // ✅ thêm
+  opensAt?: Date | null;
+  closesAt?: Date | null;
+  
   settings?: {
     allowLateJoin?: boolean;
     showResultAfterSubmit?: boolean;
@@ -829,6 +835,10 @@ export const createRoom = async (roomData: {
     teacherName: roomData.teacherName,
     status: 'waiting' as const,
     timeLimit: roomData.timeLimit,
+    // ✅ lịch
+    opensAt: roomData.opensAt ?? undefined,
+    closesAt: roomData.closesAt ?? undefined,
+    
     allowLateJoin: roomData.settings?.allowLateJoin ?? true,
     showResultAfterSubmit: roomData.settings?.showResultAfterSubmit ?? true,
     shuffleQuestions: roomData.settings?.shuffleQuestions ?? false,
@@ -887,6 +897,9 @@ const parseRoomData = (id: string, data: DocumentData): Room => {
     allowAnonymous: data.allowAnonymous ?? false, // ✅ MỚI
     totalStudents: data.totalStudents || 0,
     submittedCount: data.submittedCount || 0,
+    opensAt: toDate(data.opensAt),
+    closesAt: toDate(data.closesAt),
+
     createdAt: toDate(data.createdAt),
     updatedAt: toDate(data.updatedAt)
   };

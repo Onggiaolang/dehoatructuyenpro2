@@ -122,6 +122,45 @@ export interface ExamData {
   images?: ImageData[];  // Tất cả hình ảnh trong đề
 }
 
+// ============ FLEXIBLE SCORING SYSTEM (MỚI) ============
+
+/**
+ * Cấu hình điểm cho một section/part
+ */
+export interface SectionPointsConfig {
+  // ID của section (ví dụ: "part1", "part2", "part3")
+  sectionId: string;
+  
+  // Tên hiển thị
+  sectionName: string;
+  
+  // Loại câu hỏi trong section này
+  questionType: 'multiple_choice' | 'true_false' | 'short_answer';
+  
+  // Số câu hỏi trong section
+  totalQuestions: number;
+  
+  // Tổng điểm cho section này
+  totalPoints: number;
+  
+  // Điểm cho mỗi câu (tự động tính = totalPoints / totalQuestions)
+  pointsPerQuestion: number;
+}
+
+/**
+ * Cấu hình điểm toàn bộ đề thi
+ */
+export interface ExamPointsConfig {
+  // Tổng điểm của đề thi (thang điểm, ví dụ: 10)
+  maxScore: number;
+  
+  // Cấu hình cho từng section
+  sections: SectionPointsConfig[];
+  
+  // Tự động cân đối (nếu true, hệ thống sẽ tự động chia đều điểm)
+  autoBalance?: boolean;
+}
+
 // ============ EXAM (stored in Firebase) ============
 
 export interface Exam {
@@ -137,6 +176,9 @@ export interface Exam {
   createdBy: string;
   createdAt?: Date;
   updatedAt?: Date;
+  
+  // ✅ MỚI: Cấu hình điểm linh hoạt
+  pointsConfig?: ExamPointsConfig;
 }
 
 // ============ ROOM ============
@@ -163,35 +205,42 @@ export interface Room {
   submittedCount: number;
   createdAt?: Date;
   updatedAt?: Date;
+    // ✅ LỊCH MỞ/ĐÓNG (theo giờ)
+  opensAt?: Date;   // giờ mở phòng (nếu set)
+  closesAt?: Date;  // giờ đóng phòng (nếu set)
+
 }
 
-// ============ SCORE BREAKDOWN (MỚI) ============
+// ============ SCORE BREAKDOWN (CẢI TIẾN) ============
 
 export interface ScoreBreakdown {
   multipleChoice: {
-    total: number;        // Tổng số câu trắc nghiệm
-    correct: number;      // Số câu đúng
-    points: number;       // Điểm (0.25/câu)
+    total: number;              // Tổng số câu trắc nghiệm
+    correct: number;            // Số câu đúng
+    points: number;             // Điểm
+    pointsPerQuestion?: number; // ✅ MỚI: Điểm mỗi câu (linh hoạt)
   };
   trueFalse: {
-    total: number;        // Tổng số câu đúng sai
-    correct: number;      // Số câu đúng hoàn toàn (4/4 ý)
-    partial: number;      // Số câu đúng một phần
-    points: number;       // Tổng điểm
-    details: {            // Chi tiết từng câu
+    total: number;              // Tổng số câu đúng sai
+    correct: number;            // Số câu đúng hoàn toàn (4/4 ý)
+    partial: number;            // Số câu đúng một phần
+    points: number;             // Tổng điểm
+    pointsPerQuestion?: number; // ✅ MỚI: Điểm tối đa mỗi câu (linh hoạt)
+    details: {                  // Chi tiết từng câu
       [questionNumber: number]: {
-        correctCount: number;  // Số ý đúng (0-4)
-        points: number;        // Điểm câu này
+        correctCount: number;   // Số ý đúng (0-4)
+        points: number;         // Điểm câu này
       };
     };
   };
   shortAnswer: {
-    total: number;        // Tổng số câu trả lời ngắn
-    correct: number;      // Số câu đúng
-    points: number;       // Điểm (0.5/câu)
+    total: number;              // Tổng số câu trả lời ngắn
+    correct: number;            // Số câu đúng
+    points: number;             // Điểm
+    pointsPerQuestion?: number; // ✅ MỚI: Điểm mỗi câu (linh hoạt)
   };
-  totalScore: number;     // Tổng điểm (thang 10)
-  percentage: number;     // Phần trăm
+  totalScore: number;           // Tổng điểm (theo thang điểm cấu hình)
+  percentage: number;           // Phần trăm
 }
 
 // ============ SUBMISSION (CẢI TIẾN) ============
@@ -206,7 +255,7 @@ export interface Submission {
 
   // ✅ CẢI TIẾN: Hệ thống tính điểm mới
   scoreBreakdown: ScoreBreakdown;    // Chi tiết điểm từng phần
-  totalScore: number;                // Tổng điểm (thang 10)
+  totalScore: number;                // Tổng điểm (theo thang điểm cấu hình)
   percentage: number;                // Phần trăm
 
   // Giữ lại để tương thích
@@ -237,7 +286,7 @@ export interface RoomWithExam extends Room {
 export interface LeaderboardEntry {
   rank: number;
   student: StudentInfo;
-  score: number;           // Tổng điểm (thang 10)
+  score: number;           // Tổng điểm (theo thang điểm cấu hình)
   percentage: number;
   duration: number;
   submittedAt?: Date;

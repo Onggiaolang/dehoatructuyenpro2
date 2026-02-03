@@ -1,8 +1,11 @@
+// src/components/ExamRoom.tsx
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Room, Exam, StudentInfo, Submission, Question, QuestionOption } from '../types';
 import {
-  auth,              // ✅ THÊM: lấy uid hiện tại
+  auth,
   getExam,
+  getRoom, // ✅ thêm để lấy lịch chính xác ngay lúc vào phòng
   createSubmission,
   submitExam,
   subscribeToRoom,
@@ -27,16 +30,37 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
   const [exam, setExam] = useState<Exam | null>(null);
   const [submissionId, setSubmissionId] = useState<string | null>(existingSubmissionId || null);
   const [userAnswers, setUserAnswers] = useState<{ [key: number]: string }>({});
-  const [timeLeft, setTimeLeft] = useState(room.timeLimit * 60);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmSubmit, setShowConfirmSubmit] = useState(false);
+
   const [roomStatus, setRoomStatus] = useState(room.status);
+  const [roomLive, setRoomLive] = useState<Room>(room);
 
   // ✅ Anti-cheat
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [tabSwitchWarnings, setTabSwitchWarnings] = useState<Date[]>([]);
   const [showTabWarning, setShowTabWarning] = useState(false);
+
+  // ✅ Timer (ưu tiên closesAt nếu có)
+  const [timeLeft, setTimeLeft] = useState(() => {
+    if (room.closesAt) {
+      return Math.max(0, Math.floor((room.closesAt.getTime() - Date.now()) / 1000));
+    }
+    return room.timeLimit * 60;
+  });
+
+  // ======= derived schedule flags =======
+  const nowMs = Date.now();
+  const opensAtMs = roomLive.opensAt ? roomLive.opensAt.getTime() : null;
+  const closesAtMs = roomLive.closesAt ? roomLive.closesAt.getTime() : null;
+
+  const notOpenedYet = opensAtMs != null && nowMs < opensAtMs;
+  const alreadyClosedBySchedule = closesAtMs != null && nowMs >= closesAtMs;
+
+  const inScheduleWindow =
+    (opensAtMs == null || nowMs >= opensAtMs) &&
+    (closesAtMs == null || nowMs < closesAtMs);
 
   // Load exam
   useEffect(() => {
@@ -48,6 +72,19 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
         const uid = auth.currentUser?.uid; // ✅ uid thật của phiên hiện tại
         if (!uid) throw new Error('Auth missing (anonymous/google)');
 
+        // ✅ lấy room mới nhất để có opensAt/closesAt ngay lập tức
+        const latestRoom = await getRoom(room.id);
+        if (latestRoom) {
+          setRoomLive(latestRoom);
+          setRoomStatus(latestRoom.status);
+
+          // cập nhật timer theo closesAt nếu có
+          if (latestRoom.closesAt) {
+            const s = Math.max(0, Math.floor((latestRoom.closesAt.getTime() - Date.now()) / 1000));
+            setTimeLeft(s);
+          }
+        }
+
         const examData = await getExam(room.examId);
         if (examData) {
           setExam(examData);
@@ -56,40 +93,55 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
           // Khi tạo submission, student.id PHẢI = auth.uid để rules update cho phép submitExam()
           const fixedStudent: StudentInfo = {
             ...student,
-            id: uid, // ✅ ép đúng uid
+            id: uid // ✅ ép đúng uid
           };
 
-          if (!submissionId) {
-            const newId = await createSubmission({
-              roomId: room.id,
-              roomCode: room.code,
-              examId: room.examId,
-              student: fixedStudent, // ✅ dùng fixedStudent
-              answers: {},
-              score: 0,
-              correctCount: 0,
-              wrongCount: 0,
-              totalQuestions: examData.questions.length,
-              percentage: 0,
-              startedAt: new Date(),
-              submittedAt: null as any, // ✅ nên để null lúc chưa nộp (toDate sẽ ra undefined)
-              duration: 0,
-              status: 'in_progress',
-              // ✅ Anti-cheat fields
-              scoreBreakdown: {
-                multipleChoice: { total: 0, correct: 0, points: 0 },
-                trueFalse: { total: 0, correct: 0, partial: 0, points: 0, details: {} },
-                shortAnswer: { total: 0, correct: 0, points: 0 },
-                totalScore: 0,
-                percentage: 0
-              },
-              totalScore: 0,
-              tabSwitchCount: 0,
-              tabSwitchWarnings: [],
-              autoSubmitted: false
-            });
+          // ✅ chỉ tạo submission khi trong cửa sổ giờ & phòng chưa đóng
+          const r = latestRoom ?? roomLive;
+          const rOpens = r.opensAt ? r.opensAt.getTime() : null;
+          const rCloses = r.closesAt ? r.closesAt.getTime() : null;
+          const rNow = Date.now();
 
-            setSubmissionId(newId);
+          const rNotOpen = rOpens != null && rNow < rOpens;
+          const rClosedSchedule = rCloses != null && rNow >= rCloses;
+
+          const rInWindow = (rOpens == null || rNow >= rOpens) && (rCloses == null || rNow < rCloses);
+
+          if (!submissionId) {
+            if (r.status === 'closed' || rNotOpen || rClosedSchedule || !rInWindow) {
+              // chưa cho tạo submission
+            } else {
+              const newId = await createSubmission({
+                roomId: room.id,
+                roomCode: room.code,
+                examId: room.examId,
+                student: fixedStudent,
+                answers: {},
+                score: 0,
+                correctCount: 0,
+                wrongCount: 0,
+                totalQuestions: examData.questions.length,
+                percentage: 0,
+                startedAt: new Date(),
+                submittedAt: null as any,
+                duration: 0,
+                status: 'in_progress',
+                // ✅ Anti-cheat fields
+                scoreBreakdown: {
+                  multipleChoice: { total: 0, correct: 0, points: 0 },
+                  trueFalse: { total: 0, correct: 0, partial: 0, points: 0, details: {} },
+                  shortAnswer: { total: 0, correct: 0, points: 0 },
+                  totalScore: 0,
+                  percentage: 0
+                },
+                totalScore: 0,
+                tabSwitchCount: 0,
+                tabSwitchWarnings: [],
+                autoSubmitted: false
+              });
+
+              setSubmissionId(newId);
+            }
           }
         }
       } catch (err) {
@@ -130,24 +182,49 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
   useEffect(() => {
     const unsub = subscribeToRoom(room.id, (r: Room | null) => {
       if (r) {
+        setRoomLive(r);
         setRoomStatus(r.status);
-        if (r.status === 'closed') handleSubmit(true);
+
+        // sync timer by closesAt
+        if (r.closesAt) {
+          const s = Math.max(0, Math.floor((r.closesAt.getTime() - Date.now()) / 1000));
+          setTimeLeft(s);
+        }
+
+        if (r.status === 'closed') handleSubmit(true, true);
       }
     });
     return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room.id]);
 
-  // Timer
+  // Timer (ưu tiên closesAt)
   useEffect(() => {
-    if (timeLeft <= 0) {
-      handleSubmit(true);
-      return;
-    }
-    const t = setInterval(() => setTimeLeft((p) => (p <= 1 ? (handleSubmit(true), 0) : p - 1)), 1000);
+    const t = setInterval(() => {
+      if (roomLive.closesAt) {
+        const s = Math.max(0, Math.floor((roomLive.closesAt.getTime() - Date.now()) / 1000));
+        if (s <= 0) {
+          // tới giờ đóng
+          handleSubmit(true, true);
+          setTimeLeft(0);
+        } else {
+          setTimeLeft(s);
+        }
+        return;
+      }
+
+      setTimeLeft((p) => {
+        if (p <= 1) {
+          handleSubmit(true, true);
+          return 0;
+        }
+        return p - 1;
+      });
+    }, 1000);
+
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeLeft]);
+  }, [roomLive.closesAt?.getTime(), submissionId, exam]);
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
@@ -168,7 +245,6 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
     try {
       await ensureSignedIn();
 
-      // ✅ (Tuỳ chọn) cảnh báo nếu uid không khớp student.id props (thường không xảy ra nếu StudentPortal đã sửa)
       const uid = auth.currentUser?.uid;
       if (!uid) throw new Error('Auth missing on submit');
 
@@ -237,6 +313,42 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
     );
   }
 
+  // ✅ trước giờ mở
+  if (notOpenedYet) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-teal-50 to-teal-100 p-6">
+        <div className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full text-center">
+          <div className="text-6xl mb-3">⏳</div>
+          <h3 className="text-xl font-bold">Phòng thi chưa mở</h3>
+          <p className="text-gray-600 mt-2">
+            Sẽ mở lúc: <b>{roomLive.opensAt?.toLocaleString()}</b>
+          </p>
+          <button onClick={onExit} className="mt-5 px-5 py-2 rounded-xl bg-teal-600 text-white font-semibold">
+            Quay lại
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ✅ quá giờ đóng
+  if (alreadyClosedBySchedule && roomStatus !== 'closed') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-red-50 to-red-100 p-6">
+        <div className="bg-white rounded-2xl shadow-xl p-6 max-w-md w-full text-center">
+          <div className="text-6xl mb-3">⛔</div>
+          <h3 className="text-xl font-bold">Phòng thi đã hết giờ</h3>
+          <p className="text-gray-600 mt-2">
+            Đã đóng lúc: <b>{roomLive.closesAt?.toLocaleString()}</b>
+          </p>
+          <button onClick={onExit} className="mt-5 px-5 py-2 rounded-xl bg-teal-600 text-white font-semibold">
+            Quay lại
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!exam) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-teal-50 to-teal-100">
@@ -263,14 +375,17 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
                 <p className="font-bold">{student.name}</p>
                 <p className="text-sm text-teal-100">
                   {student.className && `Lớp ${student.className} • `}Mã: {room.code}
+                  {!inScheduleWindow && roomLive.opensAt && ` • Mở: ${roomLive.opensAt.toLocaleString()}`}
                 </p>
               </div>
             </div>
+
             <div className={`px-5 py-2 rounded-xl text-center ${timeLeft < 60 ? 'bg-red-500 animate-pulse' : 'bg-white/20'}`}>
               <div className="text-xs">⏱ Còn lại</div>
               <div className="text-2xl font-mono font-bold">{formatTime(timeLeft)}</div>
             </div>
           </div>
+
           <div className="flex items-center gap-4">
             <div className="flex-1">
               <div className="flex justify-between text-sm mb-1">
@@ -283,10 +398,13 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
                 <div className="h-full bg-gradient-to-r from-green-400 to-emerald-300 transition-all" style={{ width: `${progress}%` }} />
               </div>
             </div>
+
             <button
               onClick={() => setShowConfirmSubmit(true)}
-              disabled={isSubmitting}
-              className="px-5 py-2 bg-orange-500 hover:bg-orange-600 rounded-xl font-bold transition"
+              disabled={isSubmitting || !submissionId}
+              className={`px-5 py-2 rounded-xl font-bold transition ${
+                isSubmitting || !submissionId ? 'bg-orange-300 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600'
+              }`}
             >
               📤 Nộp bài
             </button>
@@ -306,6 +424,12 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
 
       {roomStatus === 'closed' && (
         <div className="bg-red-500 text-white text-center py-2 font-bold">⚠️ Phòng thi đã đóng! Đang nộp bài tự động...</div>
+      )}
+
+      {!submissionId && (
+        <div className="bg-yellow-500 text-white text-center py-2 font-bold">
+          ⚠️ Chưa tạo được bài làm (có thể do phòng chưa tới giờ hoặc rules). Vui lòng thử tải lại khi đến giờ.
+        </div>
       )}
 
       {/* Content */}
@@ -358,8 +482,12 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
           <div className="flex justify-center">
             <button
               onClick={() => setShowConfirmSubmit(true)}
-              disabled={isSubmitting}
-              className="px-10 py-4 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-full font-bold text-lg shadow-2xl hover:scale-105 transition"
+              disabled={isSubmitting || !submissionId}
+              className={`px-10 py-4 rounded-full font-bold text-lg shadow-2xl transition ${
+                isSubmitting || !submissionId
+                  ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-orange-500 to-red-500 text-white hover:scale-105'
+              }`}
             >
               {isSubmitting ? '⏳ Đang nộp...' : '📤 Nộp bài'}
             </button>
@@ -389,8 +517,10 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
               </button>
               <button
                 onClick={() => handleSubmit(true)}
-                disabled={isSubmitting}
-                className="flex-1 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-orange-500 to-red-500"
+                disabled={isSubmitting || !submissionId}
+                className={`flex-1 py-3 rounded-xl font-bold text-white ${
+                  isSubmitting || !submissionId ? 'bg-gray-300 cursor-not-allowed' : 'bg-gradient-to-r from-orange-500 to-red-500'
+                }`}
               >
                 {isSubmitting ? '⏳...' : '✓ Nộp bài'}
               </button>
@@ -401,6 +531,8 @@ const ExamRoom: React.FC<ExamRoomProps> = ({ room, student, existingSubmissionId
     </div>
   );
 };
+
+export default ExamRoom;
 
 // ============ QUESTION CARD ============
 
@@ -558,5 +690,3 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, displayNum, userA
     </div>
   );
 };
-
-export default ExamRoom;

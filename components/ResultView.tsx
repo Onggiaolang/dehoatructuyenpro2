@@ -1,6 +1,7 @@
 import React from 'react';
 import { Submission, Room, Exam, Question, QuestionOption } from '../types';
 import MathText from './MathText';
+import { formatScore } from '../services/scoringService';
 
 interface ResultViewProps {
   submission: Submission;
@@ -34,15 +35,17 @@ const ResultView: React.FC<ResultViewProps> = ({
   };
 
   const getGrade = (percentage: number) => {
-    if (percentage >= 90) return { grade: 'A+', color: 'text-green-600', bg: 'bg-green-100', emoji: '🏆' };
-    if (percentage >= 80) return { grade: 'A', color: 'text-green-600', bg: 'bg-green-100', emoji: '🌟' };
-    if (percentage >= 70) return { grade: 'B', color: 'text-blue-600', bg: 'bg-blue-100', emoji: '👍' };
-    if (percentage >= 60) return { grade: 'C', color: 'text-yellow-600', bg: 'bg-yellow-100', emoji: '📚' };
-    if (percentage >= 50) return { grade: 'D', color: 'text-orange-600', bg: 'bg-orange-100', emoji: '💪' };
-    return { grade: 'F', color: 'text-red-600', bg: 'bg-red-100', emoji: '📖' };
+    if (percentage >= 90) return { grade: 'A+', color: 'text-green-600', bg: 'bg-green-100', emoji: '🏆', label: 'Xuất sắc' };
+    if (percentage >= 80) return { grade: 'A', color: 'text-green-600', bg: 'bg-green-100', emoji: '🌟', label: 'Giỏi' };
+    if (percentage >= 70) return { grade: 'B+', color: 'text-blue-600', bg: 'bg-blue-100', emoji: '👍', label: 'Khá' };
+    if (percentage >= 60) return { grade: 'B', color: 'text-blue-600', bg: 'bg-blue-100', emoji: '📚', label: 'Trung bình khá' };
+    if (percentage >= 50) return { grade: 'C', color: 'text-yellow-600', bg: 'bg-yellow-100', emoji: '💪', label: 'Trung bình' };
+    if (percentage >= 40) return { grade: 'D', color: 'text-orange-600', bg: 'bg-orange-100', emoji: '📖', label: 'Yếu' };
+    return { grade: 'F', color: 'text-red-600', bg: 'bg-red-100', emoji: '😞', label: 'Kém' };
   };
 
   const gradeInfo = getGrade(submission.percentage);
+  const maxScore = exam?.pointsConfig?.maxScore || 10;
 
   return (
     <div className="min-h-screen" style={{ background: 'linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%)' }}>
@@ -90,39 +93,125 @@ const ResultView: React.FC<ResultViewProps> = ({
 
       <div className="max-w-4xl mx-auto p-6">
         {/* Score Card */}
-        <div className="bg-white rounded-3xl shadow-2xl p-8 mb-8 text-center">
-          {/* Grade */}
-          <div className={`w-32 h-32 ${gradeInfo.bg} rounded-full flex items-center justify-center mx-auto mb-6`}>
-            <div>
-              <div className="text-4xl mb-1">{gradeInfo.emoji}</div>
-              <div className={`text-3xl font-bold ${gradeInfo.color}`}>{gradeInfo.grade}</div>
+        <div className="bg-white rounded-3xl shadow-2xl p-8 mb-8">
+          {/* Grade Badge */}
+          <div className="text-center mb-6">
+            <div className={`w-32 h-32 ${gradeInfo.bg} rounded-full flex items-center justify-center mx-auto mb-4`}>
+              <div>
+                <div className="text-4xl mb-1">{gradeInfo.emoji}</div>
+                <div className={`text-3xl font-bold ${gradeInfo.color}`}>{gradeInfo.grade}</div>
+              </div>
+            </div>
+            <div className={`inline-block px-4 py-2 rounded-full ${gradeInfo.bg} ${gradeInfo.color} font-semibold`}>
+              {gradeInfo.label}
             </div>
           </div>
 
-          {/* Score */}
-          <div className="text-6xl font-bold text-teal-900 mb-2">{submission.percentage}%</div>
-          <p className="text-gray-600 text-lg mb-6">
-            Đúng {submission.correctCount}/{submission.totalQuestions} câu
-          </p>
+          {/* Main Score */}
+          <div className="text-center mb-8">
+            <div className="text-6xl font-bold mb-2">
+              <span className="text-teal-600">{formatScore(submission.totalScore)}</span>
+              <span className="text-gray-400">/{maxScore}</span>
+            </div>
+            <div className="text-3xl font-bold text-gray-500">
+              {submission.percentage}%
+            </div>
+          </div>
 
-          {/* Stats */}
-          <div className="grid grid-cols-3 gap-4 mb-8">
-            <div className="bg-green-50 rounded-xl p-4">
+          {/* Score Breakdown by Section */}
+          {submission.scoreBreakdown && (
+            <div className="mb-8">
+              <h3 className="text-center text-lg font-bold text-gray-700 mb-4">📊 Chi tiết điểm từng phần</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Multiple Choice */}
+                {submission.scoreBreakdown.multipleChoice.total > 0 && (
+                  <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-4 border-2 border-blue-300">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-2xl">🔘</span>
+                      <span className="font-bold text-blue-900">Trắc nghiệm</span>
+                    </div>
+                    <div className="text-2xl font-bold text-blue-600 mb-1">
+                      {formatScore(submission.scoreBreakdown.multipleChoice.points)}
+                    </div>
+                    <div className="text-sm text-blue-700 mb-1">
+                      Đúng {submission.scoreBreakdown.multipleChoice.correct}/{submission.scoreBreakdown.multipleChoice.total}
+                    </div>
+                    {submission.scoreBreakdown.multipleChoice.pointsPerQuestion && (
+                      <div className="text-xs text-blue-600">
+                        ({formatScore(submission.scoreBreakdown.multipleChoice.pointsPerQuestion)} điểm/câu)
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* True/False */}
+                {submission.scoreBreakdown.trueFalse.total > 0 && (
+                  <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-4 border-2 border-green-300">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-2xl">✅</span>
+                      <span className="font-bold text-green-900">Đúng/Sai</span>
+                    </div>
+                    <div className="text-2xl font-bold text-green-600 mb-1">
+                      {formatScore(submission.scoreBreakdown.trueFalse.points)}
+                    </div>
+                    <div className="text-sm text-green-700 mb-1">
+                      Đúng {submission.scoreBreakdown.trueFalse.correct}/{submission.scoreBreakdown.trueFalse.total}
+                      {submission.scoreBreakdown.trueFalse.partial > 0 && (
+                        <span className="text-yellow-600"> (+{submission.scoreBreakdown.trueFalse.partial} phần điểm)</span>
+                      )}
+                    </div>
+                    {submission.scoreBreakdown.trueFalse.pointsPerQuestion && (
+                      <div className="text-xs text-green-600">
+                        ({formatScore(submission.scoreBreakdown.trueFalse.pointsPerQuestion)} điểm/câu)
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Short Answer */}
+                {submission.scoreBreakdown.shortAnswer.total > 0 && (
+                  <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-xl p-4 border-2 border-orange-300">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-2xl">✏️</span>
+                      <span className="font-bold text-orange-900">Trả lời ngắn</span>
+                    </div>
+                    <div className="text-2xl font-bold text-orange-600 mb-1">
+                      {formatScore(submission.scoreBreakdown.shortAnswer.points)}
+                    </div>
+                    <div className="text-sm text-orange-700 mb-1">
+                      Đúng {submission.scoreBreakdown.shortAnswer.correct}/{submission.scoreBreakdown.shortAnswer.total}
+                    </div>
+                    {submission.scoreBreakdown.shortAnswer.pointsPerQuestion && (
+                      <div className="text-xs text-orange-600">
+                        ({formatScore(submission.scoreBreakdown.shortAnswer.pointsPerQuestion)} điểm/câu)
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Overall Stats */}
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="bg-green-50 rounded-xl p-4 text-center">
               <div className="text-3xl font-bold text-green-600">{submission.correctCount}</div>
               <div className="text-sm text-green-700">Câu đúng</div>
             </div>
-            <div className="bg-red-50 rounded-xl p-4">
+            <div className="bg-red-50 rounded-xl p-4 text-center">
               <div className="text-3xl font-bold text-red-600">{submission.wrongCount}</div>
               <div className="text-sm text-red-700">Câu sai</div>
             </div>
-            <div className="bg-blue-50 rounded-xl p-4">
-              <div className="text-3xl font-bold text-blue-600">{formatDuration(submission.duration).split(' ')[0]}</div>
+            <div className="bg-blue-50 rounded-xl p-4 text-center">
+              <div className="text-3xl font-bold text-blue-600">
+                {formatDuration(submission.duration).split(' ')[0]}
+              </div>
               <div className="text-sm text-blue-700">Phút làm bài</div>
             </div>
           </div>
 
           {/* Student Info */}
-          <div className="bg-gray-50 rounded-xl p-4 text-left mb-6">
+          <div className="bg-gray-50 rounded-xl p-4 mb-6">
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <span className="text-gray-500">Họ tên:</span>

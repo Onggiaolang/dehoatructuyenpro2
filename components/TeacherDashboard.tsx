@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { User, Exam, Room, Submission, Class } from '../types';
+// src/components/TeacherDashboard.tsx
+
+import React, { useEffect, useState } from 'react';
+import { User, Exam, Room, Submission, Class, ExamData, ExamPointsConfig } from '../types';
 import {
   createExam,
   getExamsByTeacher,
@@ -10,17 +12,18 @@ import {
   deleteRoom,
   subscribeToSubmissions,
   getExam,
-  // ✅ MỚI: Class management
+  // ✅ Class management
   createClass,
   getClassesByTeacher,
   getStudentsInClass,
   deleteClass,
-  addStudentToClass,
   removeStudentFromClass
 } from '../services/firebaseService';
+
 import { parseWordToExam, validateExamData } from '../services/mathWordParserService';
 import SubmissionDetailView from './SubmissionDetailView';
-import { formatScore } from '../services/scoringService';
+import PointsConfigEditor from './PointsConfigEditor';
+import { formatScore, createDefaultPointsConfig } from '../services/scoringService';
 import { exportSubmissionsToExcel } from '../services/excelExportService';
 
 interface TeacherDashboardProps {
@@ -30,6 +33,16 @@ interface TeacherDashboardProps {
 
 type Tab = 'exams' | 'rooms' | 'results' | 'classes';
 
+type PendingUploadMeta = {
+  title: string;
+  timeLimit: number;
+  total: number;
+  mc: number;
+  tf: number;
+  sa: number;
+  img: number;
+};
+
 const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState<Tab>('exams');
   const [exams, setExams] = useState<Exam[]>([]);
@@ -38,12 +51,23 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
 
+  // ✅ CÁCH A: Upload -> Parse -> Open PointsConfigEditor -> Save -> createExam(pointsConfig)
+  const [showPointsConfig, setShowPointsConfig] = useState(false);
+  const [pendingExamData, setPendingExamData] = useState<ExamData | null>(null);
+  const [pendingPointsConfig, setPendingPointsConfig] = useState<ExamPointsConfig | null>(null);
+  const [pendingMeta, setPendingMeta] = useState<PendingUploadMeta | null>(null);
+
   // Room creation modal
   const [showCreateRoom, setShowCreateRoom] = useState(false);
   const [selectedExamForRoom, setSelectedExamForRoom] = useState<Exam | null>(null);
   const [roomTimeLimit, setRoomTimeLimit] = useState(45);
   const [selectedClassForRoom, setSelectedClassForRoom] = useState<string>('');
-  const [allowAnonymous, setAllowAnonymous] = useState(false); // ✅ MỚI
+  const [allowAnonymous, setAllowAnonymous] = useState(false);
+
+  // ✅ Schedule open/close
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [roomOpensAt, setRoomOpensAt] = useState<string>(''); // datetime-local string
+  const [roomClosesAt, setRoomClosesAt] = useState<string>(''); // datetime-local string
 
   // Class management
   const [showCreateClass, setShowCreateClass] = useState(false);
@@ -61,28 +85,29 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
   // Load data
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.id]);
 
   // Subscribe to submissions when a room is selected
   useEffect(() => {
-    if (selectedRoom) {
-      const unsubscribe = subscribeToSubmissions(selectedRoom.id, (subs) => {
-        setSubmissions(subs);
-      });
+    if (!selectedRoom) return;
 
-      // Load exam for detail view
-      loadExamForRoom(selectedRoom.examId);
+    const unsubscribe = subscribeToSubmissions(selectedRoom.id, (subs) => {
+      setSubmissions(subs);
+    });
 
-      return () => unsubscribe();
-    }
-  }, [selectedRoom]);
+    loadExamForRoom(selectedRoom.examId);
+
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRoom?.id]);
 
   // Load students when class is selected
   useEffect(() => {
-    if (selectedClass) {
-      loadClassStudents(selectedClass.id);
-    }
-  }, [selectedClass]);
+    if (!selectedClass) return;
+    loadClassStudents(selectedClass.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClass?.id]);
 
   const loadData = async () => {
     setIsLoading(true);
@@ -120,6 +145,58 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     }
   };
 
+  // ✅ Reset pending upload state
+  const resetPendingUpload = () => {
+    setShowPointsConfig(false);
+    setPendingExamData(null);
+    setPendingPointsConfig(null);
+    setPendingMeta(null);
+  };
+
+  // ✅ FINAL STEP: createExam(..., pointsConfig)
+  const finalizeCreateExam = async (config: ExamPointsConfig) => {
+    if (!pendingExamData || !pendingMeta) return;
+
+    setIsUploading(true);
+    try {
+      await createExam({
+        title: pendingMeta.title,
+        description: `${pendingMeta.total} câu hỏi • Môn Toán`,
+        timeLimit: pendingMeta.timeLimit || 90,
+        questions: pendingExamData.questions,
+        sections: pendingExamData.sections,
+        answers: pendingExamData.answers,
+        createdBy: user.id,
+        images: pendingExamData.images || [],
+        pointsConfig: config
+      });
+
+      alert(
+        `✅ Đã tải lên đề thi thành công!\n\n` +
+          `📊 Thống kê:\n` +
+          `• Tổng: ${pendingMeta.total} câu hỏi\n` +
+          `• Trắc nghiệm: ${pendingMeta.mc} câu\n` +
+          `• Đúng/Sai: ${pendingMeta.tf} câu\n` +
+          `• Trả lời ngắn: ${pendingMeta.sa} câu\n` +
+          `• Hình ảnh: ${pendingMeta.img} ảnh\n\n` +
+          `⚙️ Cấu hình điểm:\n` +
+          config.sections
+            .map((s) => `• ${s.sectionName}: ${s.totalPoints} điểm (${s.pointsPerQuestion}/câu)`)
+            .join('\n')
+      );
+
+      resetPendingUpload();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await loadData();
+    } catch (err) {
+      console.error('Create exam (with pointsConfig) error:', err);
+      alert('❌ Lỗi khi tạo đề thi.\n\n' + (err as Error).message);
+      // Không reset để GV có thể bấm Lưu lại
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleFileUpload = async (file: File) => {
     if (!file.name.endsWith('.docx')) {
       alert('⚠️ Vui lòng chọn file Word (.docx)');
@@ -133,7 +210,6 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
 
       if (!validation.valid && examData.questions.length === 0) {
         alert('❌ File không hợp lệ:\n' + validation.errors.join('\n'));
-        setIsUploading(false);
         return;
       }
 
@@ -141,38 +217,33 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         console.warn('⚠️ Warnings:', validation.errors);
       }
 
-      const examId = await createExam({
-        title: file.name.replace('.docx', ''),
-        description: `${examData.questions.length} câu hỏi • Môn Toán`,
-        timeLimit: examData.timeLimit || 90,
-        questions: examData.questions,
-        sections: examData.sections,
-        answers: examData.answers,
-        createdBy: user.id,
-        images: examData.images || []
-      });
-
+      // ✅ Thống kê
       const mcCount = examData.questions.filter((q) => q.type === 'multiple_choice').length;
       const tfCount = examData.questions.filter((q) => q.type === 'true_false').length;
       const saCount = examData.questions.filter((q) => q.type === 'short_answer').length;
       const imgCount = examData.images?.length || 0;
 
-      alert(
-        `✅ Đã tải lên đề thi thành công!\n\n` +
-          `📊 Thống kê:\n` +
-          `• Tổng: ${examData.questions.length} câu hỏi\n` +
-          `• Trắc nghiệm: ${mcCount} câu\n` +
-          `• Đúng/Sai: ${tfCount} câu\n` +
-          `• Trả lời ngắn: ${saCount} câu\n` +
-          `• Hình ảnh: ${imgCount} ảnh`
-      );
+      // ✅ Default points config (thang 10)
+      const defaultConfig = createDefaultPointsConfig(examData.questions);
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await loadData();
+      setPendingExamData(examData);
+      setPendingPointsConfig(defaultConfig);
+      setPendingMeta({
+        title: file.name.replace('.docx', ''),
+        timeLimit: examData.timeLimit || 90,
+        total: examData.questions.length,
+        mc: mcCount,
+        tf: tfCount,
+        sa: saCount,
+        img: imgCount
+      });
+
+      setShowPointsConfig(true);
     } catch (err) {
       console.error('Upload error:', err);
       alert('❌ Lỗi khi tải lên. Vui lòng thử lại.\n\n' + (err as Error).message);
     } finally {
+      // ✅ kết thúc parse (pha createExam sẽ bật isUploading trong finalizeCreateExam)
       setIsUploading(false);
     }
   };
@@ -209,6 +280,10 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     try {
       await deleteClass(classId);
       alert('✅ Đã xóa lớp!');
+      if (selectedClass?.id === classId) {
+        setSelectedClass(null);
+        setClassStudents([]);
+      }
       loadData();
     } catch (err) {
       console.error('Delete class error:', err);
@@ -220,7 +295,33 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
     if (!selectedExamForRoom) return;
 
     try {
-      const selectedClassData = selectedClassForRoom ? classes.find((c) => c.id === selectedClassForRoom) : null;
+      const selectedClassData = selectedClassForRoom
+        ? classes.find((c) => c.id === selectedClassForRoom) || null
+        : null;
+
+      // ✅ parse schedule
+      let opensAtDate: Date | null = null;
+      let closesAtDate: Date | null = null;
+
+      if (scheduleEnabled) {
+        if (!roomOpensAt) {
+          alert('⚠️ Bạn đã bật hẹn giờ nhưng chưa chọn Giờ mở.');
+          return;
+        }
+        opensAtDate = new Date(roomOpensAt);
+
+        if (roomClosesAt) {
+          closesAtDate = new Date(roomClosesAt);
+        } else {
+          // nếu không nhập giờ đóng, tự đóng theo timeLimit
+          closesAtDate = new Date(opensAtDate.getTime() + roomTimeLimit * 60 * 1000);
+        }
+
+        if (closesAtDate.getTime() <= opensAtDate.getTime()) {
+          alert('⚠️ Giờ đóng phải sau giờ mở.');
+          return;
+        }
+      }
 
       const newRoom = await createRoom({
         examId: selectedExamForRoom.id,
@@ -230,6 +331,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         timeLimit: roomTimeLimit,
         classId: selectedClassData?.id,
         className: selectedClassData?.name,
+
+        // ✅ schedule
+        opensAt: opensAtDate,
+        closesAt: closesAtDate,
+
         settings: {
           allowLateJoin: true,
           showResultAfterSubmit: true,
@@ -239,16 +345,31 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         }
       });
 
+      const scheduleText =
+        newRoom.opensAt || newRoom.closesAt
+          ? `\n⏰ Lịch:\n${newRoom.opensAt ? `• Mở: ${newRoom.opensAt.toLocaleString()}\n` : ''}${
+              newRoom.closesAt ? `• Đóng: ${newRoom.closesAt.toLocaleString()}\n` : ''
+            }`
+          : '';
+
       alert(
         `✅ Đã tạo phòng thi!\n\n` +
           `Mã phòng: ${newRoom.code}\n` +
           `${selectedClassData ? `Lớp: ${selectedClassData.name}\n` : ''}` +
+          scheduleText +
           `\nChia sẻ mã này cho học sinh.`
       );
+
       setShowCreateRoom(false);
       setSelectedExamForRoom(null);
       setSelectedClassForRoom('');
       setAllowAnonymous(false);
+
+      // reset schedule
+      setScheduleEnabled(false);
+      setRoomOpensAt('');
+      setRoomClosesAt('');
+
       loadData();
     } catch (err) {
       console.error('Create room error:', err);
@@ -263,7 +384,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
       await deleteExam(examId);
       loadData();
     } catch (err) {
-      console.error('Delete error:', err);
+      console.error('Delete exam error:', err);
+      alert('❌ Lỗi khi xóa đề thi');
     }
   };
 
@@ -272,12 +394,20 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
       if (action === 'delete') {
         if (!confirm('Bạn có chắc muốn xóa phòng thi này? Tất cả bài làm sẽ bị xóa.')) return;
         await deleteRoom(roomId);
+
+        if (selectedRoom?.id === roomId) {
+          setSelectedRoom(null);
+          setSubmissions([]);
+          setSelectedSubmission(null);
+          setCurrentExam(null);
+        }
       } else {
         await updateRoomStatus(roomId, action === 'start' ? 'active' : 'closed');
       }
       loadData();
     } catch (err) {
       console.error('Room action error:', err);
+      alert('❌ Lỗi thao tác phòng thi');
     }
   };
 
@@ -325,7 +455,12 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as Tab)}
+              onClick={() => {
+                setActiveTab(tab.id as Tab);
+                if (tab.id !== 'results') {
+                  setSelectedSubmission(null);
+                }
+              }}
               className={`px-6 py-3 rounded-xl font-semibold transition ${
                 activeTab === tab.id ? 'bg-teal-600 text-white shadow-lg' : 'bg-white text-gray-600 hover:bg-gray-50'
               }`}
@@ -350,8 +485,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                 <div className="bg-white rounded-2xl p-6 shadow-lg mb-6">
                   <h3 className="font-bold text-gray-800 mb-4">📤 Tải lên đề thi mới (Môn Toán)</h3>
                   <p className="text-sm text-gray-500 mb-4">
-                    Hỗ trợ file Word (.docx) với công thức LaTeX ($...$) và 3 loại câu hỏi: Trắc nghiệm, Đúng/Sai, Trả
-                    lời ngắn
+                    Hỗ trợ file Word (.docx) với công thức LaTeX ($...$) và 3 loại câu hỏi: Trắc nghiệm, Đúng/Sai, Trả lời
+                    ngắn
                   </p>
                   <input
                     type="file"
@@ -359,6 +494,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) handleFileUpload(file);
+                      e.currentTarget.value = ''; // ✅ cho phép chọn lại cùng file
                     }}
                     className="hidden"
                     id="upload-exam"
@@ -474,7 +610,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                           </div>
                           <div>
                             <h3 className="font-bold text-gray-800">{room.examTitle}</h3>
-                            <div className="flex items-center gap-3 text-sm text-gray-500">
+                            <div className="flex items-center gap-3 text-sm text-gray-500 flex-wrap">
                               <span
                                 className="font-mono font-bold text-lg text-teal-600 cursor-pointer hover:text-teal-800"
                                 onClick={() => copyToClipboard(room.code)}
@@ -482,6 +618,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                               >
                                 📋 {room.code}
                               </span>
+
                               {room.className && (
                                 <>
                                   <span>•</span>
@@ -490,12 +627,24 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                                   </span>
                                 </>
                               )}
+
                               <span>•</span>
                               <span>{room.timeLimit} phút</span>
+
                               <span>•</span>
                               <span>
                                 {room.submittedCount}/{room.totalStudents} đã nộp
                               </span>
+
+                              {(room.opensAt || room.closesAt) && (
+                                <>
+                                  <span>•</span>
+                                  <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
+                                    ⏰ {room.opensAt ? `Mở: ${room.opensAt.toLocaleString()}` : 'Mở: -'}{' '}
+                                    {room.closesAt ? `• Đóng: ${room.closesAt.toLocaleString()}` : ''}
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -510,11 +659,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                                 : 'bg-yellow-100 text-yellow-700'
                             }`}
                           >
-                            {room.status === 'active'
-                              ? 'Đang thi'
-                              : room.status === 'closed'
-                              ? 'Đã đóng'
-                              : 'Chờ bắt đầu'}
+                            {room.status === 'active' ? 'Đang thi' : room.status === 'closed' ? 'Đã đóng' : 'Chờ bắt đầu'}
                           </span>
 
                           {room.status === 'waiting' && (
@@ -565,8 +710,13 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                   <select
                     value={selectedRoom?.id || ''}
                     onChange={(e) => {
-                      const room = rooms.find((r) => r.id === e.target.value);
-                      setSelectedRoom(room || null);
+                      const room = rooms.find((r) => r.id === e.target.value) || null;
+                      setSelectedRoom(room);
+                      setSelectedSubmission(null);
+                      if (!room) {
+                        setSubmissions([]);
+                        setCurrentExam(null);
+                      }
                     }}
                     className="w-full p-3 border-2 border-gray-300 rounded-xl focus:border-teal-500 focus:outline-none"
                   >
@@ -578,7 +728,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     ))}
                   </select>
                 </div>
-                {/* ✅ THÊM NÚT XUẤT EXCEL VÀO ĐÂY */}
+
+                {/* ✅ NÚT XUẤT EXCEL */}
                 {selectedRoom && submissions.length > 0 && (
                   <div className="mb-6">
                     <button
@@ -589,6 +740,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                     </button>
                   </div>
                 )}
+
                 {/* Results Table */}
                 {selectedRoom && (
                   <div className="bg-white rounded-xl shadow-lg overflow-hidden">
@@ -680,9 +832,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                           </div>
                           <div>
                             <div className="text-2xl font-bold text-green-600">
-                              {formatScore(
-                                submissions.reduce((acc, s) => acc + s.totalScore, 0) / submissions.length
-                              )}
+                              {formatScore(submissions.reduce((acc, s) => acc + s.totalScore, 0) / submissions.length)}
                             </div>
                             <div className="text-sm text-gray-500">Điểm TB</div>
                           </div>
@@ -767,6 +917,37 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
         )}
       </div>
 
+      {/* ✅ MODAL: PointsConfigEditor (CÁCH A) */}
+      {showPointsConfig && pendingPointsConfig && pendingMeta && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="w-full max-w-3xl">
+            {/* Gợi ý nhanh */}
+            <div className="mb-3 bg-white/90 rounded-xl p-4 border border-orange-200">
+              <div className="font-bold text-gray-800">📌 Đề: {pendingMeta.title}</div>
+              <div className="text-sm text-gray-600 mt-1">
+                Tổng {pendingMeta.total} câu • TN {pendingMeta.mc} • Đ/S {pendingMeta.tf} • TLN {pendingMeta.sa}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                Nhập “tổng điểm” cho từng phần (ví dụ TN=3 điểm, Đ/S=7 điểm) → hệ thống tự chia “điểm mỗi câu”.
+              </div>
+            </div>
+
+            <PointsConfigEditor
+              config={pendingPointsConfig}
+              onChange={async (cfg) => {
+                setPendingPointsConfig(cfg);
+                await finalizeCreateExam(cfg);
+              }}
+              onClose={() => {
+                // ✅ tránh đóng khi đang lưu
+                if (isUploading) return;
+                resetPendingUpload();
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Create Room Modal */}
       {showCreateRoom && selectedExamForRoom && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -807,7 +988,49 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
               </select>
             </div>
 
-            {/* ✅ Chỉnh sửa cho phép thi tự do */}
+            {/* ✅ Hẹn giờ mở/đóng */}
+            <div className="mb-6">
+              <label className="flex items-center gap-3 cursor-pointer p-3 bg-indigo-50 border-2 border-indigo-200 rounded-xl hover:bg-indigo-100 transition">
+                <input
+                  type="checkbox"
+                  checked={scheduleEnabled}
+                  onChange={(e) => setScheduleEnabled(e.target.checked)}
+                  className="w-5 h-5 accent-indigo-500"
+                />
+                <div className="flex-1">
+                  <div className="font-semibold text-gray-900">⏰ Hẹn giờ mở/đóng phòng</div>
+                  <div className="text-xs text-gray-600 mt-0.5">Nếu bật, học sinh chỉ thi trong khoảng thời gian này</div>
+                </div>
+              </label>
+
+              {scheduleEnabled && (
+                <div className="mt-3 grid grid-cols-1 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Giờ mở:</label>
+                    <input
+                      type="datetime-local"
+                      value={roomOpensAt}
+                      onChange={(e) => setRoomOpensAt(e.target.value)}
+                      className="w-full p-3 border-2 border-gray-300 rounded-xl focus:border-teal-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Giờ đóng:</label>
+                    <input
+                      type="datetime-local"
+                      value={roomClosesAt}
+                      onChange={(e) => setRoomClosesAt(e.target.value)}
+                      className="w-full p-3 border-2 border-gray-300 rounded-xl focus:border-teal-500 focus:outline-none"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Nếu để trống “giờ đóng” → hệ thống tự đóng = giờ mở + {roomTimeLimit} phút.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* ✅ Cho phép thi tự do */}
             <div className="mb-6">
               <label className="flex items-center gap-3 cursor-pointer p-3 bg-orange-50 border-2 border-orange-200 rounded-xl hover:bg-orange-100 transition">
                 <input
@@ -830,6 +1053,10 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
                   setSelectedExamForRoom(null);
                   setSelectedClassForRoom('');
                   setAllowAnonymous(false);
+
+                  setScheduleEnabled(false);
+                  setRoomOpensAt('');
+                  setRoomClosesAt('');
                 }}
                 className="flex-1 py-3 rounded-xl font-semibold border-2 border-gray-300 hover:bg-gray-50 transition"
               >
@@ -975,7 +1202,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ user, onLogout }) =
 
       {/* Submission Detail View */}
       {selectedSubmission && currentExam && (
-        <SubmissionDetailView submission={selectedSubmission} exam={currentExam} onClose={() => setSelectedSubmission(null)} />
+        <SubmissionDetailView
+          submission={selectedSubmission}
+          exam={currentExam}
+          onClose={() => setSelectedSubmission(null)}
+        />
       )}
     </div>
   );
